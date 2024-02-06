@@ -1,5 +1,5 @@
 package hide.comp.cdb;
-import js.jquery.Helper.*;
+import hide.ui.QueryHelper.*;
 
 enum DisplayMode {
 	Table;
@@ -22,6 +22,7 @@ class Table extends Component {
 	public var view : cdb.DiffFile.SheetView;
 
 	var separators : Array<Separator>;
+	var previewDrop : Element;
 
 	public var nestedIndex : Int = 0;
 
@@ -53,6 +54,10 @@ class Table extends Component {
 			}
 		}
 		refresh();
+
+		previewDrop = new Element('<div class="cdb-preview-drag"><div>');
+		previewDrop.appendTo(root);
+		previewDrop.hide();
 	}
 
 	public function getRealSheet() {
@@ -93,14 +98,17 @@ class Table extends Component {
 
 	function setupTableElement() {
 		cloneTableHead();
+		#if js
 		@:privateAccess {
 			var elt = editor.element.parent();
 			var scrollbarWidth = elt.parent().width() - elt.width();
 			element.width(@:privateAccess editor.cdbTable.contentWidth - scrollbarWidth); // prevent to reflow all cdb-view
 		}
+		#end
 	}
 
 	function cloneTableHead() {
+		#if js
 		var target = element.find('thead').first().find('.head');
 		if (target.length == 0)
 			return;
@@ -116,7 +124,7 @@ class Table extends Component {
 			elt.width(targetElt.width());
 			elt.css("max-width", targetElt.width());
 
-			var txt = elt[0].innerHTML;
+			var txt = elt.get(0).innerHTML;
 			elt.empty();
 			J("<span>" + txt + "</span>").appendTo(elt);
 
@@ -124,9 +132,11 @@ class Table extends Component {
 		}
 
 		J('.cdb').prepend(clone);
+		#end
 	}
 
 	function updateDrag() {
+		#if js
 		var scrollHeight = js.Browser.document.body.scrollHeight;
 		if (ide.mouseY > scrollHeight*0.8) {
 			var scroll = element.get()[0].parentElement.parentElement;
@@ -136,6 +146,7 @@ class Table extends Component {
 			var scroll = element.get()[0].parentElement.parentElement;
 			scroll.scrollTop -= 15 + Std.int((scrollHeight*0.2 - ide.mouseY)/(scrollHeight*0.2)*30);
 		}
+		#end
 	}
 
 	function refreshTable() {
@@ -169,7 +180,8 @@ class Table extends Component {
 				}
 				editor.cursor.clickLine(line, e.shiftKey);
 			});
-			var headEl = head.get()[0];
+			#if js
+			var headEl = head.get(0);
 			headEl.draggable = true;
 			headEl.ondragstart = function(e:js.html.DragEvent) {
 				if (editor.cursor.getCell() != null && editor.cursor.getCell().inEdit) {
@@ -178,26 +190,25 @@ class Table extends Component {
 				}
 				ide.registerUpdate(updateDrag);
 				e.dataTransfer.effectAllowed = "move";
+				previewDrop.show();
 			}
 			headEl.ondrag = function(e:js.html.DragEvent) {
 				if (hxd.Key.isDown(hxd.Key.ESCAPE)) {
 					e.dataTransfer.dropEffect = "none";
 					e.preventDefault();
 				}
+
+				var pickedLine = getPickedLine(e);
+				if (pickedLine != null) {
+					var lineEl = editor.getLine(line.table.sheet, pickedLine.index).element;
+					previewDrop.css("top",'${pickedLine.index > line.index ? lineEl.position().top + lineEl.height() : lineEl.position().top}px');
+				}
 			}
 			headEl.ondragend = function(e:js.html.DragEvent) {
 				ide.unregisterUpdate(updateDrag);
+				previewDrop.hide();
 				if (e.dataTransfer.dropEffect == "none") return false;
-				var pickedEl = js.Browser.document.elementFromPoint(e.clientX, e.clientY);
-				var pickedLine = null;
-				var parentEl = pickedEl;
-				while (parentEl != null) {
-					if (lines.filter((otherLine) -> otherLine.element.get()[0] == parentEl).length > 0) {
-						pickedLine = lines.filter((otherLine) -> otherLine.element.get()[0] == parentEl)[0];
-						break;
-					}
-					parentEl = parentEl.parentElement;
-				}
+				var pickedLine = getPickedLine(e);
 				if (pickedLine != null) {
 					editor.moveLine(line, pickedLine.index - line.index, true);
 					return true;
@@ -205,6 +216,7 @@ class Table extends Component {
 
 				return false;
 			}
+			#end
 			line;
 		}];
 
@@ -296,10 +308,27 @@ class Table extends Component {
 			element.append(l);
 		}
 
+		#if js
 		if( sheet.parent == null ) {
 			cols.ready(setupTableElement);
 			cols.on("resize", setupTableElement);
 		}
+		#end
+	}
+
+	function getPickedLine(e : js.html.DragEvent) {
+		var pickedEl = js.Browser.document.elementFromPoint(e.clientX, e.clientY);
+		var pickedLine = null;
+		var parentEl = pickedEl;
+		while (parentEl != null) {
+			if (lines.filter((otherLine) -> otherLine.element.get()[0] == parentEl).length > 0) {
+				pickedLine = lines.filter((otherLine) -> otherLine.element.get()[0] == parentEl)[0];
+				break;
+			}
+			parentEl = parentEl.parentElement;
+		}
+
+		return pickedLine;
 	}
 
 	function makeSeparatorTree( ?root ) {
@@ -318,8 +347,11 @@ class Table extends Component {
 			if( s == root ) select = next;
 			if( lv > curLevel ) {
 				stack.push(cur);
-				cur = cur.subs[cur.subs.length - 1];
+
+				if (cur.subs.length > 0)
+					cur = cur.subs[cur.subs.length - 1];
 			}
+
 			cur.subs.push(next);
 			curLevel = lv;
 		}
@@ -343,13 +375,13 @@ class Table extends Component {
 		var t = makeSeparatorTree(sheet.separators[sepIndex]);
 		while( t.parent != null ) {
 			if( isSepHidden(t.index) )
-				new Element(subs[t.index]).find("a.toggle").click();
+				new Element(subs.get(t.index)).find("a.toggle").click();
 			t = t.parent;
 		}
 	}
 
 	function makeSeparator( sindex : Int, colCount : Int ) : Separator {
-		var sep = J("<tr>").addClass("separator").attr("sindex", sindex).append('<td colspan="${colCount+1}"><a href="#" class="toggle"></a><span></span></td>');
+		var sep = J("<tr>").addClass("separator").attr("sindex", sindex).append(J('<td colspan="${colCount+1}"><a href="#" class="toggle"></a><span></span></td>'));
 		var content = sep.find("span");
 		var toggle = sep.find("a");
 		var sepInfo = sheet.separators[sindex];
@@ -384,17 +416,18 @@ class Table extends Component {
 
 		var syncLevel : Int = -1;
 		function sync() {
-			data.hidden = title == null ? null : isSepHidden(sindex);
-			toggle.css({ display : title == null ? "none" : "" });
+			data.hidden = title == null ? false : isSepHidden(sindex);
+			toggle.toggle(title != null);
 			toggle.text(data.hidden ? "🡆" : "🡇");
 			content.text(title == null ? "" : title+(data.hidden ? " ("+getLines().length+")" : ""));
 			sep.toggleClass("sep-hidden", data.hidden == true);
+			var def = #if js null #else 0 #end;
 			if( syncLevel != sepInfo.level ) {
-				sep.removeClass("seplevel-"+(syncLevel == null ? 0 : syncLevel));
+				sep.removeClass("seplevel-"+(syncLevel == def ? 0 : syncLevel));
 				syncLevel = sepInfo.level;
-				sep.addClass('seplevel-'+(syncLevel == null ? 0 : syncLevel));
+				sep.addClass('seplevel-'+(syncLevel == def ? 0 : syncLevel));
 			}
-			sep.attr("level", syncLevel == null ? 0 : sepInfo.level);
+			sep.attr("level", syncLevel == def ? 0 : sepInfo.level);
 		}
 
 		sep.contextmenu(function(e) {
@@ -421,7 +454,7 @@ class Table extends Component {
 							showRec(s);
 					}
 					if( isSepHidden(t.index) == show )
-						new Element(subs[t.index]).find("a.toggle").click();
+						new Element(subs.get(t.index)).find("a.toggle").click();
 					if( show ) {
 						for( s in t.subs )
 							showRec(s);
@@ -449,7 +482,10 @@ class Table extends Component {
 									var level = t.sep.level;
 									if( level == null ) level = 0;
 									level += delta;
-									t.sep.level = level == 0 ? js.Lib.undefined : level;
+									if( level == 0 )
+										Reflect.deleteField(t.sep,"level")
+									else
+										t.sep.level = level;
 									for( s in t.subs )
 										deltaRec(s);
 								}
@@ -481,6 +517,7 @@ class Table extends Component {
 					editor.refresh();
 				}}
 			];
+			#if js
 			if( sepInfo.path != null )
 				opts.unshift({
 					label : "Open",
@@ -488,20 +525,24 @@ class Table extends Component {
 						ide.openFile(sepInfo.path);
 					},
 				});
+			#end
 			new hide.comp.ContextMenu(opts);
 		});
 
 		sep.dblclick(function(e) {
 			if( !canInsert() ) return;
 			content.empty();
-			J("<input>").appendTo(content).focus().val(title == null ? "" : title).blur(function(_) {
-				title = JTHIS.val();
-				JTHIS.remove();
+			J("<input>").appendTo(content).focus().val(title == null ? "" : title).blur(function(e) {
+				title = Element.getVal(e.getThis());
+				e.getThis().remove();
 				if( title == "" ) title = null;
 				editor.beginChanges();
 				var sep = sheet.separators[sindex];
 				var prevTitle = sep.title;
-				sep.title = title == null ? js.Lib.undefined : title;
+				if( title == null )
+					Reflect.deleteField(sep,"title");
+				else
+					sep.title = title;
 				if( prevTitle != null ) {
 					if( title == null ) {
 						if( sep.level == null ) sep.level = 0;
@@ -509,7 +550,8 @@ class Table extends Component {
 					}
 				} else if( title != null && sep.level > 0 ) {
 					sep.level--;
-					if( sep.level == 0 ) sep.level = js.Lib.undefined;
+					if( sep.level == 0 )
+						Reflect.deleteField(sep,"level");
 				}
 				editor.endChanges();
 				sync();
@@ -521,7 +563,7 @@ class Table extends Component {
 			}).keypress(function(e) {
 				e.stopPropagation();
 			}).keydown(function(e) {
-				if( e.keyCode == 13 ) { JTHIS.blur(); e.preventDefault(); } else if( e.keyCode == 27 ) content.text(title);
+				if( e.keyCode == 13 ) { e.getThis().blur(); e.preventDefault(); } else if( e.keyCode == 27 ) content.text(title);
 				e.stopPropagation();
 			});
 		});
@@ -533,7 +575,7 @@ class Table extends Component {
 				var s = sheet.separators[sindex - 1 - i];
 				if( s.title != null && (s.level == null || s.level == level) ) {
 					if( isSepHidden(sindex - 1 - i) ) {
-						sep[0].style.display = "none";
+						sep.hide();
 						data.hidden = true;
 					}
 					break;
@@ -558,7 +600,7 @@ class Table extends Component {
 			var subs = element.find("tr.separator");
 			function toggleRec( t : SepTree ) {
 				var sid = sheet.separators.indexOf(t.sep);
-				subs[sid].style.display = hidden ? "none" : "";
+				subs.eq(sid).toggle(!hidden);
 				if( !hidden ) {
 					if( isSepHidden(sid) ) return;
 					for( l in getLines(sid) )
@@ -611,6 +653,7 @@ class Table extends Component {
 		var ids = [];
 		if( id != null ) ids.push(id);
 		var pos = scopes.length;
+		var scope : Null<Int> = scope;
 		while( true ) {
 			pos -= scope;
 			if( pos < 0 ) {
@@ -668,7 +711,7 @@ class Table extends Component {
 			}
 
 			var line = new Line(this, [c], lines.length, l);
-			var cell = new Cell(td[0], line, c);
+			var cell = new Cell(td.get(0), line, c);
 			lines.push(line);
 
 			th.mousedown(function(e) {
@@ -702,7 +745,7 @@ class Table extends Component {
 		else if( !canInsert )
 			end.remove();
 		sel.change(function(e) {
-			var v = sel.val();
+			var v = Element.getVal(sel);
 			if( v == "" )
 				return;
 			sel.val("");

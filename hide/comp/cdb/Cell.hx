@@ -10,7 +10,7 @@ class Cell {
 
 	var ide : hide.Ide;
 
-	public var elementHtml : js.html.Element;
+	public var elementHtml : Element.HTMLElement;
 	var editor : Editor;
 	var currentValue : Dynamic;
 	var watches : Array<String> = new Array<String>();
@@ -21,9 +21,9 @@ class Cell {
 	public var table(get, never) : Table;
 	var blurOff = false;
 	public var inEdit = false;
-	var dropdown : js.html.Element = null;
+	var dropdown : Element.HTMLElement = null;
 
-	public function new( root : js.html.Element, line : Line, column : cdb.Data.Column ) {
+	public function new( root : Element.HTMLElement, line : Line, column : cdb.Data.Column ) {
 		this.elementHtml = root;
 		ide = hide.Ide.inst;
 
@@ -149,7 +149,9 @@ class Cell {
 			var forms : Array<hide.comp.ContextMenu.ContextMenuItem>;
 			var current = editor.formulas.get(this);
 			forms = [for( f in editor.formulas.getList(table.sheet) ) { label : f.name, click : () -> if( f == current ) setF(null) else setF(f), checked : f == current }];
+			#if !hl
 			forms.push({ label : "New...", click : () -> editor.formulas.createNew(this, setF) });
+			#end
 			menu = [
 				{ label : "Formula", menu : forms }
 			];
@@ -185,12 +187,14 @@ class Cell {
 	}
 
 	public function refresh(withSubtable = false) {
+		#if js
 		if (dropdown != null) {
 			if (js.Browser.document.body.contains(dropdown)) {
 				return;
 			}
 			dropdown = null;
 		}
+		#end
 		currentValue = Reflect.field(line.obj, column.name);
 
 		blurOff = true;
@@ -308,7 +312,7 @@ class Cell {
 
 	function valueHtml( c : cdb.Data.Column, v : Dynamic, sheet : cdb.Sheet, obj : Dynamic, scope : Array<{ s : cdb.Sheet, obj : Dynamic }> ) : {str: String, containsHtml: Bool} {
 
-		inline function val(s:String) {
+		inline function val(s:Dynamic) {
 			return {str: Std.string(s), containsHtml:false};
 		}
 
@@ -440,13 +444,14 @@ class Cell {
 			html('<div class="color" style="background-color:#${StringTools.hex(v,6)}"></div>');
 		case TFile:
 			var path = ide.getPath(v);
-			var url = ide.getUnCachedUrl(path);
 			var ext = v.split(".").pop().toLowerCase();
 			if (v == "") return html('<span class="error">#MISSING</span>');
 			var innerHtml = StringTools.htmlEscape(v);
 			innerHtml = '<span title=\'$innerHtml\' >' + innerHtml  + '</span>';
 			if (!editor.quickExists(path)) return html('<span class="error">#NOTFOUND : $innerHtml</span>');
 			else if( ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "gif" ) {
+				#if js
+				var url = ide.getUnCachedUrl(path);
 				var dims = imageDims.get(url);
 				var dimsText = dims != null ? dims.width+"x"+dims.height : "";
 				var onload = dims != null ? "" : 'onload="hide.comp.cdb.Cell.onImageLoad(this, \'$url\');"';
@@ -461,6 +466,7 @@ class Cell {
 						<div class="previewContent"><div class="label">$dimsText</div>$img</div>
 					</span>';
 				}
+				#end
 			}
 			return html(innerHtml + ' <input type="submit" value="open" onclick="hide.Ide.inst.openFile(\'$path\')"/>');
 		case TTilePos:
@@ -479,11 +485,13 @@ class Cell {
 		}
 	}
 
+	#if js
 	static function onImageLoad(img : js.html.ImageElement, url) {
 		var dims = {width : img.width, height : img.height};
 		imageDims.set(url, dims);
 		new Element(img).parent().find(".label").text(dims.width+'x'+dims.height);
 	}
+	#end
 
 	static var KWDS = ["for","if","var","this","while","else","do","break","continue","switch","function","return","new","throw","try","catch","case","default"];
 	static var KWD_REG = new EReg([for( k in KWDS ) "(\\b"+k+"\\b)"].join("|"),"g");
@@ -561,6 +569,7 @@ class Cell {
 		var max = width > height ? width : height;
 		var zoom = max <= 32 ? 2 : 64 / max;
 		var inl = isInline ? 'display:inline-block;' : '';
+		#if js
 		var url = ide.getUnCachedUrl(path);
 
 		var px = Std.int(v.size*v.x*zoom);
@@ -577,8 +586,12 @@ class Cell {
 		queueTileLoading();
 		watchFile(path);
 		return {str: html, containsHtml: true};
+		#else
+		return {str : "", containsHtml : false};
+		#end
 	}
 
+	#if !hl
 	static var isTileLoadingQueued = false;
 	static function queueTileLoading() {
 		if (!isTileLoadingQueued) {
@@ -631,6 +644,7 @@ class Cell {
 			elt.parentElement.append(img);
 		}
 	}
+	#end
 
 	public function isTextInput() {
 		return switch( column.type ) {
@@ -694,7 +708,7 @@ class Cell {
 		switch( column.type ) {
 		case TString if( column.kind == Script ):
 			open();
-		case TInt, TFloat, TString, TId, TCustom(_), TDynamic:
+		case TInt, TFloat, TString, TId, TDynamic:
 			var val = value;
 			if (column.display == Percent) {
 				val *= 100;
@@ -709,16 +723,17 @@ class Cell {
 			var i = new Element("<div contenteditable='true' tabindex='1' class='custom-text-edit'>");
 			// replace all spaces with unbreakable spaces (I wanna die)
 			str = spacesToNBSP(str);
-			i[0].innerText = str;
-			var textHeight = i[0].offsetHeight;
+			i.get(0).innerText = str;
+			var textHeight = i.get(0).offsetHeight;
 			var longText = textHeight > 25 || str.indexOf("\n") >= 0;
 
-			elementHtml.appendChild(i[0]);
+			elementHtml.appendChild(i.get(0));
+			#if js
 			i.keypress(function(e) {
 				e.stopPropagation();
 			});
 
-			i[0].addEventListener("paste", function(e) {
+			i.get(0).addEventListener("paste", function(e) {
 				e.preventDefault();
 
 				var event : Dynamic = e;
@@ -726,9 +741,9 @@ class Cell {
 					event = e.originalEvent;
 				}
 				var text = event.clipboardData.getData('text/plain');
-
 				js.Browser.document.execCommand("insertText", false, text);
 			});
+			#end
 			i.dblclick(function(e) e.stopPropagation());
 
 			i.val(str);
@@ -737,7 +752,7 @@ class Cell {
 				this.closeEdit();
 			}
 			i.keydown(function(e) {
-				var t : js.html.HtmlElement = cast e.target;
+				var t : Element.HTMLElement = cast e.target;
 				var textHeight = t.offsetHeight;
 				var longText = textHeight > 25 || t.innerText.indexOf("\n") >= 0;
 				switch( e.keyCode ) {
@@ -763,7 +778,7 @@ class Cell {
 				e.stopPropagation();
 			});
 			i.keyup(function(e) try {
-				var t : js.html.HtmlElement = cast e.target;
+				var t : Element.HTMLElement = cast e.target;
 				var v = editor.base.parseValue(column.type, t.innerText);
 
 				if (column.type == TId && !isUniqueID((v:String), true)) {
@@ -783,11 +798,13 @@ class Cell {
 
 			// Select whole content of contenteditable div
 			{
-				var range =  js.Browser.document.createRange();
-				range.selectNodeContents(i[0]);
+				#if js
+				var range = js.Browser.document.createRange();
+				range.selectNodeContents(i.get(0));
 				var sel = js.Browser.window.getSelection();
 				sel.removeAllRanges();
 				sel.addRange(range);
+				#end
 			}
 
 
@@ -802,7 +819,7 @@ class Cell {
 			if( sdat == null ) return;
 			elementHtml.innerHTML = null;
 			elementHtml.classList.add("edit");
-
+			#if js
 			if (!useSelect2) {
 				var isLocal = sdat.idCol.scope != null;
 				var elts: Array<hide.comp.Dropdown.Choice>;
@@ -916,10 +933,11 @@ class Cell {
 				});
 				s.on("select2:close", function(_) closeEdit());
 			}
+			#end
 		case TEnum(values):
 			elementHtml.innerHTML = null;
 			elementHtml.classList.add("edit");
-
+			#if js
 			if (!useSelect2) {
 				var elts : Array<hide.comp.Dropdown.Choice> = [for( i in 0...values.length ){
 					id : "" + i,
@@ -991,6 +1009,24 @@ class Cell {
 				});
 				s.on("select2:close", function(_) closeEdit());
 			}
+			#end
+		case TCustom(typeName):
+			{
+				#if js
+				var shouldClose = false;
+				if (elementHtml.classList.contains("edit"))
+					shouldClose = true;
+
+				if (shouldClose)
+					return;
+
+				elementHtml.innerHTML = null;
+				elementHtml.classList.add("edit");
+				var cellEl = new Element(elementHtml);
+				var paddingCell = 4;
+				editCustomType(typeName, currentValue, column, cellEl, js.Browser.document.body.clientWidth - (cellEl.offset().left + paddingCell + (cellEl.width() + paddingCell) / 2.0), cellEl.offset().top);
+				#end
+			}
 		case TColor:
 			var elem = new Element(elementHtml);
 			var preview = elem.find(".color");
@@ -998,6 +1034,7 @@ class Cell {
 				elem.html('<div class="color" style="background-color:#${StringTools.hex(0xFFFFFF,6)}"></div>');
 				preview = elem.find(".color");
 			}
+			#if js
 			var cb = new ColorPicker(false, elem, preview);
 			cb.value = currentValue;
 			cb.onChange = function(drag) {
@@ -1008,11 +1045,14 @@ class Cell {
 				cb.remove();
 				closeEdit();
 			};
+			#end
 		case TFile:
+			#if js
 			ide.chooseFile(["*"], function(file) {
 				setValue(file);
 				closeEdit();
 			}, false, currentValue);
+			#end
 		case TFlags(values):
 			var div = new Element("<div>").addClass("flagValues");
 			div.click(function(e) e.stopPropagation()).dblclick(function(e) e.stopPropagation());
@@ -1027,7 +1067,7 @@ class Cell {
 				if( mask & (1<<i) == 0 ) continue;
 				var f = new Element("<input>").attr("type", "checkbox").prop("checked", val & (1 << i) != 0).change(function(e) {
 					val &= ~(1 << i);
-					if( e.getThis().prop("checked") ) val |= 1 << i;
+					if( e.getThis().is(":checked") ) val |= 1 << i;
 					e.stopPropagation();
 				});
 				var line = new Element("<label>");
@@ -1040,8 +1080,8 @@ class Cell {
 			}
 			elementHtml.innerHTML = null;
 			var modal = new Element("<div>").addClass("hide-modal");
-			elementHtml.appendChild(modal[0]);
-			elementHtml.appendChild(div[0]);
+			elementHtml.appendChild(modal.get(0));
+			elementHtml.appendChild(div.get(0));
 			modal.click(function(e) {
 				setValue(val);
 				closeEdit();
@@ -1109,6 +1149,7 @@ class Cell {
 			}
 
 			if( file == null ) {
+				#if js
 				ide.chooseImage(function(path) {
 					if( path == null ) {
 						closeEdit();
@@ -1119,9 +1160,11 @@ class Cell {
 					closeEdit();
 					edit();
 				},true);
+				#end
 				return;
 			}
 
+			#if js
 			var ts = new hide.comp.TileSelector(file,dims,modal.content);
 			ts.allowRectSelect = true;
 			ts.allowSizeSelect = true;
@@ -1138,6 +1181,7 @@ class Cell {
 				refresh();
 				focus();
 			};
+			#end
 		case TLayer(_), TTileLayer:
 			// no edit
 		case TImage:
@@ -1146,6 +1190,7 @@ class Cell {
 	}
 
 	public function open( ?immediate : Bool ) {
+		#if js
 		if( column.type == TString && column.kind == Script ) {
 
 			// prevent opening the script if we are undo/redo-ing as this
@@ -1155,15 +1200,16 @@ class Cell {
 			var str = value == null ? "" : editor.base.valToString(column.type, value);
 			table.toggleList(this, immediate, function() return new ScriptTable(editor, this));
 		} else
+		#end
 			table.toggleList(this, immediate);
 	}
 
 	public function setErrorMessage( msg : String ) {
-		var prevError = elementHtml.querySelector("div.error");
+		var prevError = new Element(elementHtml).find("div.error");
 		if (prevError != null)
 			prevError.remove();
 		if( msg == null ) return;
-		var div = js.Browser.document.createDivElement();
+		var div = #if hl ide.createElement("div") #else js.Browser.document.createDivElement() #end;
 		div.classList.add("error");
 		div.innerText = msg;
 		elementHtml.appendChild(div);
@@ -1253,7 +1299,7 @@ class Cell {
 
 	public function closeEdit() {
 		inEdit = false;
-		var input = elementHtml.querySelector("div[contenteditable]");
+		var input = new Element(elementHtml).find("div[contenteditable]").get(0);
 		var text : String = input?.innerText;
 		if (text != null) {
 			text = nBSPtoSpaces(text);
@@ -1264,4 +1310,350 @@ class Cell {
 		focus();
 	}
 
+	public function editCustomType(typeName : String, ctValue : Dynamic, col : cdb.Data.Column, parentEl : Element, rightAnchor: Float, topAnchor : Float, depth : Int = 0) {
+		var customType = editor.base.getCustomType(typeName);
+
+		parentEl.empty();
+		var rootEl = new Element('<div class="cdb-type-string"></div>').appendTo(parentEl);
+		new Element('<p>...</p>').css("margin", "0px").css("text-align","center").appendTo(rootEl);
+
+		var content = new Element('
+		<div class="cdb-types">
+			<select name="customType" id="dropdown-custom-type">
+			<option value="none">None</option>
+			${ [for (idx in 0...customType.cases.length) '<option value=${idx}>${customType.cases[idx].name}</option>'].join("") }
+			</select>
+			<div id="parameters">
+			<div>
+		</div>');
+
+		content.appendTo(parentEl);
+
+		// Manage keyboard flow
+		content.keydown(function(e){
+			var focused = content.find(':focus');
+
+			if (e.altKey || e.shiftKey)
+				return;
+
+			switch (e.keyCode) {
+				case hxd.Key.ENTER:
+					if (focused.is('div'))
+						focused.trigger('click');
+
+					if (focused.is('input')) {
+						if (focused.is('input[type="checkbox"]'))
+							focused.prop('checked', !focused.is(':checked'));
+						else if (focused.prop('readonly'))
+							focused.prop('readonly', false);
+						else
+							focused.prop('readonly', true);
+					}
+
+					if (focused.is('select')) {
+
+					}
+
+					e.stopPropagation();
+					e.preventDefault();
+
+				case hxd.Key.ESCAPE:
+					if (focused.is('input') && !focused.is('input[type="checkbox"]') && !focused.prop('readonly')) {
+						focused.prop('readonly', true);
+
+						e.stopPropagation();
+						return;
+					}
+
+					rootEl.trigger('click');
+					e.stopPropagation();
+					e.preventDefault();
+
+				case hxd.Key.RIGHT:
+					if (focused.is('input') && !focused.prop('readonly') && !focused.is('input[type="checkbox"]')) {
+						e.stopPropagation();
+						return;
+					}
+
+					var s = content.children('select').first();
+					var p = content.find('#parameters').children('.value');
+
+					focused.blur();
+
+					if (focused.is(s))
+						p.first().focus();
+					else if (focused.is(p.last()))
+						s.focus();
+					else
+						p.eq(p.index(focused) + 1).focus();
+					e.stopPropagation();
+					e.preventDefault();
+
+				case hxd.Key.LEFT:
+					if (focused.is('input') && !focused.prop('readonly') && !focused.is('input[type="checkbox"]')) {
+						e.stopPropagation();
+						return;
+					}
+
+					var s = content.children('select').first();
+					var p = content.find('#parameters').children('.value');
+
+					focused.blur();
+
+					if (focused.is(s))
+						p.last().focus();
+					else if (focused.is(p.first()))
+						s.focus();
+					else
+						p.eq(p.index(focused) - 1).focus();
+					e.stopPropagation();
+					e.preventDefault();
+
+				case hxd.Key.UP, hxd.Key.DOWN:
+					e.stopPropagation();
+					e.preventDefault();
+
+				default:
+					trace("Not managed");
+			}
+		});
+
+		function getHtml(value : Dynamic, column : cdb.Data.Column) {
+			switch (column.type) {
+				case TId, TString, TDynamic:
+					var e = new Element('<input type="text" readonly ${value != null ? 'value="${value}"': ''}></input>');
+					e.on('click', function(_) {
+						e.prop('readonly', false);
+					});
+					return e;
+				case TBool:
+					var el =  new Element('<input type="checkbox"></input>');
+					if (value != null && value)
+						el.attr("checked", "true");
+					return el;
+				case TInt, TFloat:
+					var e = new Element('<input type="number" readonly ${'value="${value != null ? value : 0}"'}></input>');
+					e.on('click', function(_) {
+						e.prop('readonly', false);
+					});
+					return e;
+				case TRef(name):
+					{
+						var sdat = editor.base.getSheet(name);
+						if( sdat == null ) return new Element("<p>No sheet data found</p>");
+
+						var isLocal = sdat.idCol.scope != null;
+						var elts: Array<hide.comp.Dropdown.Choice>;
+
+						function makeClasses(o: cdb.Sheet.SheetIndex) {
+							var ret = [];
+							for( c in sdat.columns ) {
+								switch( c.type ) {
+									case TId | TBool:
+										ret.push("r_" + c.name + "_" + Reflect.field(o.obj, c.name));
+									case TEnum( values ):
+										ret.push("r_" + c.name + "_" + values[Reflect.field(o.obj, c.name)]);
+									case TFlags( values ):
+									default:
+								}
+							}
+							return ret;
+						}
+
+						if( isLocal ) {
+							var scope = refScope(sdat,table.getRealSheet(),line.obj,[]);
+							var prefix = table.makeId(scope, sdat.idCol.scope, null)+":";
+							elts = [ for( d in sdat.all ) if( StringTools.startsWith(d.id,prefix) ) {
+								id : d.id.split(":").pop(),
+								ico : d.ico,
+								text : d.disp,
+								classes : makeClasses(d),
+							}];
+						} else {
+							elts = [ for( d in sdat.all ) {
+								id : d.id,
+								ico : d.ico,
+								text : d.disp,
+								classes : makeClasses(d),
+							}];
+						}
+
+						elts.unshift({
+							id : null,
+							ico : null,
+							text : "None",
+						});
+
+						function makeIcon(c: hide.comp.Dropdown.Choice) {
+							if (sdat.props.displayIcon == null)
+								return null;
+							if (c.ico == null)
+								return new Element("<div style='display:inline-block;width:16px'/>");
+							return new Element(tileHtml(c.ico, true).str);
+						}
+
+						var html = new Element('
+						<select name="ref">
+							${ [for(idx in 0...elts.length) '<option value="${idx}" ${elts[idx].text == value ? "selected":""}>${elts[idx].text}</option>'].join('') }
+						</select>');
+						return html;
+					}
+				case TCustom(name):
+					{
+						var valueHtml = this.valueHtml(column, value, line.table.getRealSheet(), ctValue, []);
+						var display = '<span class="error">#NULL</span>';
+
+						if (valueHtml != null && valueHtml.str != "")
+							display = valueHtml.str;
+
+						var html = new Element('<div tabindex="0" class="sub-cdb-type"><p>${display}</p></div>').css("min-width","80px").css("background-color","#222222");
+						html.on("click", function(e) {
+							// When opening one custom type, close others of the same level
+							content.find(".cdb-type-string").trigger("click");
+
+							editCustomType(name, value, column, html, content.width() - html.position().left - html.width(), 25, depth + 1);
+						});
+
+						return html;
+					}
+				default:
+					return new Element('<p>Not supported</p>');
+			}
+		}
+
+		var d = content.find("#dropdown-custom-type");
+		d.find("option").eq(ctValue == null || ctValue.length == 0 ? 0 : Std.int(ctValue[0] + 1)).attr("selected", "true");
+
+		var paramsContent = content.find("#parameters");
+
+		function buildParameters() {
+			paramsContent.empty();
+			var val = d.val();
+			var selected = val != null ? customType.cases[content.find("#dropdown-custom-type").val()] : null;
+
+			if (selected != null && selected.args.length > 0) {
+				for (idx in 0...selected.args.length) {
+					new Element('<p>&nbsp${selected.args[idx].name}&nbsp:</p>').appendTo(paramsContent);
+					var v = ctValue != null ? ctValue[idx + 1] : null;
+					if (v == null && selected.args[idx].type.match(TCustom(_))) {
+						ctValue[idx + 1] = [];
+						v = ctValue[idx + 1];
+					}
+
+					getHtml(v, selected.args[idx]).addClass("value").appendTo(paramsContent);
+
+					if (idx != selected.args.length - 1)
+						new Element('<p>,&nbsp</p>').appendTo(paramsContent);
+				}
+			}
+
+			content.css("right", '${depth == 0 ? rightAnchor - content.width() / 2.0 : rightAnchor}px');
+		}
+
+		function closeCdbTypeEdit(applyModifications : Bool = true) {
+			// Close children cdb types editor before closing this one
+			var children = content.children().find(".cdb-type-string");
+			if (children.length > 0)
+				children.first().trigger("click");
+
+			var newCtValue : Array<Dynamic> = null;
+
+			var selected = d.val() != null ? customType.cases[d.val()] : null;
+			if (selected != null) {
+				newCtValue = [];
+				newCtValue.push(Std.int(d.val()));
+
+				if (selected.args != null && selected.args.length > 0) {
+					var paramsValues = paramsContent.find(".value");
+					for (idx in 0...selected.args.length) {
+						var paramValue = paramsValues.eq(idx);
+
+						if (paramValue.is("input[type=checkbox]")) {
+							var v = paramValue.is(':checked');
+							newCtValue.push(v);
+						}
+						else if (paramValue.is("input[type=number]"))
+							newCtValue.push(Std.parseFloat(paramValue.val()));
+						else if (paramValue.is("select")) {
+							var sel = paramValue.find(":selected");
+							if (sel.val() != 0)
+								newCtValue.push(sel.text());
+							else
+								newCtValue.push("");
+						}
+						else if (paramValue.is("div")) {
+							// Case where the param value is another cdbType
+							var v = ctValue[idx + 1] != null && ctValue[idx + 1].length > 0 ? ctValue[idx + 1] : null;
+							newCtValue.push(v);
+						}
+						else
+							newCtValue.push(paramsValues.eq(idx).val());
+					}
+				}
+			}
+
+			parentEl.empty();
+
+			if (newCtValue != null) {
+				if (ctValue == null) ctValue = [];
+				for (idx in 0...ctValue.length) ctValue.pop();
+				for (idx in 0...newCtValue.length) {
+					var u = newCtValue[idx];
+					ctValue.push(newCtValue[idx]);
+				}
+			}
+
+			if (ctValue.length == 0)
+				ctValue = null;
+
+			if (depth == 0) {
+				this.setValue(ctValue);
+				this.closeEdit();
+				this.focus();
+			}
+			else {
+				var htmlValue = valueHtml(col, ctValue, line.table.getRealSheet(), currentValue, []);
+				new Element('<p>${htmlValue.str}</p>').appendTo(parentEl);
+				parentEl.focus();
+			}
+		}
+
+		buildParameters();
+
+		d.on("change", function(e) {
+			if (ctValue == null) ctValue = [];
+			for (idx in 0...ctValue.length) ctValue.pop();
+
+			var selected = d.val() == 0 ? null : customType.cases[d.val()];
+			if (selected != null) {
+				ctValue.push(d.val());
+				for (idx in 0...selected.args.length) {
+					switch (selected.args[idx].type) {
+						case TId, TString, TRef(_):
+							ctValue.push('');
+						case TBool:
+							ctValue.push(false);
+						case TInt, TFloat:
+							ctValue.push(0);
+						case TCustom(_), TList, TEnum(_):
+							ctValue.push([]);
+						default:
+							ctValue.push(null);
+					}
+				}
+			}
+			var t = this.currentValue;
+			buildParameters();
+		});
+
+		d.focus();
+
+		// Prevent missclick to actually close the edit mode and
+		// open another one
+		rootEl.on("click", function(e, applyModifications) { closeCdbTypeEdit(applyModifications == null); e.stopPropagation(); });
+		content.on("click", function(e) { e.stopPropagation(); });
+		content.on("dblclick", function(e) { e.stopPropagation(); });
+
+		content.css("top", '${topAnchor}px');
+	}
 }

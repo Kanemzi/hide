@@ -119,7 +119,7 @@ class Editor extends Component {
 			element.mousedown(onMouseDown);
 			keys = new hide.ui.Keys(element);
 		} else {
-			cdbTable.element.off("mousedown", onMouseDown);
+			cdbTable.element.off("mousedown" #if js, onMouseDown #end);
 			cdbTable.element.mousedown(onMouseDown);
 			keys = cdbTable.keys;
 		}
@@ -171,7 +171,7 @@ class Editor extends Component {
 		refresh();
 	}
 
-	function onMouseDown( e : js.jquery.Event ) {
+	function onMouseDown( e : hide.Element.Event ) {
 		switch ( e.which ) {
 		case 4:
 			cursorJump(true);
@@ -183,7 +183,7 @@ class Editor extends Component {
 		return true;
 	}
 
-	function onKey( e : js.jquery.Event ) {
+	function onKey( e : hide.Element.Event ) {
 		if( e.altKey )
 			return false;
 		var isRepeat: Bool = untyped e.originalEvent.repeat;
@@ -327,7 +327,7 @@ class Editor extends Component {
 					}
 
 					if (filtered)
-						lines[idx].classList.add("filtered");
+						lines.get(idx).classList.add("filtered");
 				}
 			}
 			else {
@@ -682,8 +682,8 @@ class Editor extends Component {
 				for( cid in 0...clipboard.schema.length ) {
 					var c1 = clipboard.schema[cid];
 					var c2 = columns[cid + posX];
-					var p = Editor.getColumnProps(c2);
 					if( c2 == null ) continue;
+					var p = Editor.getColumnProps(c2);
 
 					if( !cursor.table.canEditColumn(c2.name) || p.copyPasteImmutable)
 						continue;
@@ -904,7 +904,7 @@ class Editor extends Component {
 			var commands = [for (h in hooks) if (h.sheets.has(s)) h.cmd];
 			function runRec(i: Int) {
 				runningHooks = true;
-				ide.runCommand(commands[i], (e, stdout, stderr) -> {
+				ide.runCommand(commands[i], (e) -> {
 					if (e != null) {
 						ide.error('Hook error:\n$e');
 						hookEnd();
@@ -1060,7 +1060,11 @@ class Editor extends Component {
 		}
 		return id;
 	}
+
 	public function getReferences(id: String, withCodePaths = true, returnAtFirstRef = false, sheet: cdb.Sheet, ?codeFileCache: Array<{path: String, data:String}>, ?prefabFileCache: Array<{path: String, data:String}>) : Array<{str:String, ?goto:Void->Void}> {
+		#if hl
+		return [];
+		#else
 		if( id == null )
 			return [];
 
@@ -1212,7 +1216,7 @@ class Editor extends Component {
 								continue;
 							}
 							var ext = f.split(".").pop();
-							if( @:privateAccess hrt.prefab.Library.registeredExtensions.exists(ext) ) {
+							if( @:privateAccess hrt.prefab.Prefab.extensionRegistry.exists(ext) ) {
 								prefabFileCache.push({path: fpath, data: sys.io.File.getContent(fpath)});
 							}
 						}
@@ -1312,6 +1316,7 @@ class Editor extends Component {
 			}
 		}
 		return message;
+		#end
 	}
 
 	public function findUnreferenced(col: cdb.Data.Column, table: Table) {
@@ -1467,7 +1472,7 @@ class Editor extends Component {
 				// If user input a comaprison character, switch to expression mode for
 				// the current filter
 				for (c in Editor.COMPARISON_EXPR_CHARS) {
-					if (StringTools.contains(e.getThis().val(), c) && !searchExp) {
+					if (StringTools.contains(Element.getVal(e.getThis()), c) && !searchExp) {
 						searchExp = true;
 						var searchTypeBtn = searchBox.find(".search-type");
 						searchTypeBtn.toggleClass("fa-superscript", searchExp);
@@ -1477,7 +1482,7 @@ class Editor extends Component {
 					}
 				}
 
-				filters[index].text = e.getThis().val();
+				filters[index].text = Element.getVal(e.getThis());
 				filters[index].isExpr = e.getThis().next().hasClass("fa-superscript");
 
 				// Slow table refresh protection
@@ -1574,10 +1579,12 @@ class Editor extends Component {
 				addSearchInput();
 			if( filters.length <= currentFilters.length ) {
 				var inputs = inputCont.find("input");
+				#if js
 				for( i in 0...inputs.length ) {
 					var input: js.html.InputElement = cast inputs[i];
 					input.value = currentFilters[i].text;
 				}
+				#end
 			}
 		}
 	}
@@ -1616,6 +1623,7 @@ class Editor extends Component {
 	}
 
 	public function newColumn( sheet : cdb.Sheet, ?index : Int, ?onDone : cdb.Data.Column -> Void, ?col ) {
+		#if js
 		var modal = new hide.comp.cdb.ModalColumnForm(this, sheet, col, element);
 		modal.setCallback(function() {
 			var c = modal.getColumn(col);
@@ -1645,6 +1653,7 @@ class Editor extends Component {
 					t.refresh();
 			modal.closeModal();
 		});
+		#end
 	}
 
 	public function editColumn( sheet : cdb.Sheet, col : cdb.Data.Column ) {
@@ -1656,7 +1665,7 @@ class Editor extends Component {
 			return;
 		if( table.displayMode == Properties ) {
 			var ins = table.element.find("select.insertField");
-			var options = [for( o in ins.find("option").elements() ) o.val()];
+			var options = [for( o in ins.find("option").elements() ) Element.getVal(o)];
 			ins.attr("size", options.length);
 			options.shift();
 			ins.focus();
@@ -1673,7 +1682,7 @@ class Editor extends Component {
 				case K.DOWN if( index < options.length - 1 ):
 					ins.val(options[++index]);
 				case K.ENTER:
-					@:privateAccess table.insertProperty(ins.val());
+					@:privateAccess table.insertProperty(Element.getVal(ins));
 				default:
 				}
 				e.stopPropagation();
@@ -2143,7 +2152,9 @@ class Editor extends Component {
 				return;
 			categories = [for(s in wstr.split(",")) { var t = StringTools.trim(s); if(t.length > 0) t; }];
 			setFunc(categories.length > 0 ? categories : null);
+			#if editor
 			ide.initMenu();
+			#end
 		}}];
 
 		for(name in getCategories(base)) {
@@ -2166,6 +2177,19 @@ class Editor extends Component {
 		return menu;
 	}
 
+	public function createDBSheet( ?index : Int ) {
+		var value = ide.ask("Sheet name");
+		if( value == "" || value == null ) return null;
+		var s = ide.database.createSheet(value, index);
+		if( s == null ) {
+			ide.error("Name already exists");
+			return null;
+		}
+		ide.saveDatabase();
+		refreshAll();
+		return s;
+	}
+
 	public function popupSheet( withMacro = true, ?sheet : cdb.Sheet, ?onChange : Void -> Void ) {
 		if( view != null )
 			return;
@@ -2176,7 +2200,7 @@ class Editor extends Component {
 		var content : Array<ContextMenu.ContextMenuItem> = [];
 		if (withMacro) {
 			content = content.concat([
-				{ label : "Add Sheet", click : function() { beginChanges(); var db = ide.createDBSheet(index+1); endChanges(); if( db != null ) onChange(); } },
+				{ label : "Add Sheet", click : function() { beginChanges(); var db = createDBSheet(index+1); endChanges(); if( db != null ) onChange(); } },
 				{ label : "Move Left", click : function() { beginChanges(); base.moveSheet(sheet,-1); endChanges(); onChange(); } },
 				{ label : "Move Right", click : function() { beginChanges(); base.moveSheet(sheet,1); endChanges(); onChange(); } },
 				{ label : "Rename", click : function() {
@@ -2268,8 +2292,10 @@ class Editor extends Component {
 	}
 
 	public function focus() {
+		#if js
 		if( element.is(":focus") ) return;
 		(element[0] : Dynamic).focus({ preventScroll : true });
+		#end
 	}
 
 	static public function getSheetProps( s : cdb.Sheet ) {

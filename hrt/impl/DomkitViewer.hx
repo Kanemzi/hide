@@ -66,7 +66,10 @@ class DomkitViewer extends h2d.Object {
 	var style : h2d.domkit.Style;
 	var baseVariables : Map<String,domkit.CssValue>;
 	var contexts : Array<Dynamic> = [];
+	var variables : Map<String,Dynamic> = [];
 	var rebuilding = false;
+	var compArgs : Map<String,Dynamic>;
+	var rootObject : h2d.Object;
 
 	public function new( style : h2d.domkit.Style, res : hxd.res.Resource, ?parent ) {
 		super(parent);
@@ -93,6 +96,28 @@ class DomkitViewer extends h2d.Object {
 		contexts.push(ctx);
 		rebuildDelay();
 	}
+
+	#if castle
+	public function addCDB( cdb : cdb.Types.IndexId<Dynamic,Dynamic> ) {
+		var obj = {};
+		var idName = null;
+		for( c in @:privateAccess cdb.sheet.columns ) {
+			switch( c.type ) {
+			case TId: idName = c.name; break;
+			default:
+			}
+		}
+		for( o in cdb.all ) {
+			var id = Reflect.field(o, idName);
+			if( id == null || id == "" ) continue;
+			Reflect.setField(obj, id, id);
+		}
+		var name = @:privateAccess cdb.name;
+		name = name.charAt(0).toUpperCase() + name.substr(1);
+		variables.set(name, obj);
+		rebuildDelay();
+	}
+	#end
 
 	function reloadVariables() {
 		var vars = baseVariables.copy();
@@ -133,21 +158,29 @@ class DomkitViewer extends h2d.Object {
 		var interp = new DomkitInterp();
 		for( c in contexts )
 			interp.setContext(c);
+		for( name => value in variables )
+			interp.variables.set(name, value);
 		return interp;
 	}
 
 	function rebuild() {
 		var fullText = resource.entry.getText();
-		var text = fullText;
-		var startPos = 0;
-		var cssStart = 0;
+		var content = StringTools.trim(fullText);
 		var cssText = "";
-		if( StringTools.startsWith(text,"<css>") ) {
-			var pos = text.indexOf("</css>");
-			cssStart = 5;
-			cssText = text.substr(cssStart, pos - cssStart);
-			startPos = pos + 6;
-			text = text.substr(startPos);
+		var paramsText = "";
+
+		if( StringTools.startsWith(content,"<css>") ) {
+			var pos = content.indexOf("</css>");
+			cssText = StringTools.trim(content.substr(5, pos - 6));
+			content = content.substr(pos + 6);
+			content = StringTools.trim(content);
+		}
+
+		if( StringTools.startsWith(content,"<params>") ) {
+			var pos = content.indexOf("</params>");
+			paramsText = StringTools.trim(content.substr(8, pos - 9));
+			content = content.substr(pos + 9);
+			content = StringTools.trim(content);
 		}
 
 		@:privateAccess {
@@ -161,14 +194,37 @@ class DomkitViewer extends h2d.Object {
 		try {
 			var parser = new domkit.MarkupParser();
 			parser.allowRawText = true;
-			var expr = parser.parse(text,resource.entry.path, startPos);
+			var eparams = parseCode(paramsText, fullText.indexOf(paramsText));
+			var expr = parser.parse(content,resource.entry.path, fullText.indexOf(content));
 			root = domkit.Component.build(<flow class="debugRoot" layout="stack" content-align="middle middle" fill-width="true" fill-height="true"/>);
-
 			interp = makeInterp();
+			switch( eparams.e ) {
+			case EBlock(el): // prevent local to be removed
+				for( e in el ) evalCode(e);
+			default:
+				evalCode(eparams);
+			}
+			var vparams : Dynamic = @:privateAccess interp.locals.get("params")?.r;
+			if( vparams != null ) {
+				@:privateAccess interp.locals.remove("params");
+				for( f in Reflect.fields(vparams) )
+					interp.variables.set(f, Reflect.field(vparams,f));
+			}
+			compArgs = null;
+			var vargs : Dynamic = interp.variables.get("defaultArgs");
+			if( vargs != null ) {
+				interp.variables.remove("defaultArgs");
+				compArgs = new Map();
+				for( f in Reflect.fields(vargs) )
+					compArgs.set(f, Reflect.field(vargs,f));
+			}
 			addRec(expr, root);
 			interp = null;
 		} catch( e : domkit.Error ) {
 			onError(e);
+			return;
+		} catch( e : hscript.Expr.Error ) {
+			onError(new domkit.Error(e.toString(), e.pmin, e.pmax));
 			return;
 		}
 
@@ -222,9 +278,15 @@ class DomkitViewer extends h2d.Object {
 			for( c in e.children )
 				addRec(c, parent);
 		case Node(name):
+			if( e.condition != null ) {
+				var expr = parseCode(e.condition.cond, e.condition.pmin);
+				if( !evalCode(expr) )
+					return;
+			}
+			var isRoot = parent.parent == null;
 			var c = domkit.Component.get(name, true);
 			// if we are top component, resolve our parent component
-			if( parent.parent == null ) {
+			if( isRoot ) {
 				var parts = name.split(":");
 				var parent = null;
 				if( parts.length == 2 ) {
@@ -254,15 +316,77 @@ class DomkitViewer extends h2d.Object {
 				// TODO : typecheck argument
 				v;
 			}];
+			if( isRoot && compArgs != null  ) {
+				if( e.arguments.length == 0 ) {
+					for( a in @:privateAccess c.argsNames ) {
+						var v : Dynamic = compArgs.get(a);
+						args.push(v);
+						interp.variables.set(a, v);
+					}
+				}
+				compArgs = null;
+			}
 			var attributes = {};
+			var objId = null, objIdArray = false;
 			for( a in e.attributes ) {
+				if( a.name == "id" ) {
+					objId = switch( a.value ) {
+					case RawValue("true"):
+						var name = null;
+						for( a in e.attributes )
+							if( a.name == "class" ) {
+								name = switch( a.value ) { case RawValue(v): v; default: null; };
+								break;
+							}
+						name;
+					case RawValue(name) if( StringTools.endsWith(name,"[]") ):
+						objIdArray = true;
+						name.substr(0,name.length - 2);
+					case RawValue(name):
+						name;
+					case Code(_): null;
+					}
+					if( objId != null )
+						(attributes:Dynamic).id = objId;
+					continue;
+				}
 				switch( a.value ) {
 				case RawValue(v):
 					Reflect.setField(attributes,a.name,v);
 				case Code(_):
+					// skip (init after)
 				}
 			}
+			var childrenCreated = false;
+			if( isRoot ) {
+				// only create parent structure, since we will create our own structure here
+				@:privateAccess c.createHook = function(obj) {
+					rootObject = obj;
+					interp.variables.set("this", obj);
+					// create children immediately as our post-init code might require some components to be init
+					childrenCreated = true;
+					for( c in e.children )
+						addRec(c, obj);
+				};
+			}
 			var p = @:privateAccess domkit.Properties.createNew(c.name, parent.dom, args, attributes);
+			if( isRoot ) {
+				rootObject = cast p.obj;
+				@:privateAccess c.createHook = null;
+				interp.variables.set("this", p.obj);
+			}
+			if( objId != null ) {
+				if( objIdArray ) {
+					var arr : Array<Dynamic> = try Reflect.getProperty(rootObject, objId) catch( e : Dynamic ) null;
+					if( arr == null ) {
+						arr = [];
+						try Reflect.setProperty(rootObject, objId, arr) catch( e : Dynamic ) {};
+					}
+					arr.push(p.obj);
+				} else {
+					try Reflect.setProperty(rootObject, objId, p.obj) catch( e : Dynamic ) {}
+				}
+			}
 			for( a in e.attributes ) {
 				var h = p.component.getHandler(domkit.Property.get(a.name));
 				if( h == null ) {
@@ -274,10 +398,13 @@ class DomkitViewer extends h2d.Object {
 				case Code(code):
 					var v : Dynamic = evalCode(parseCode(code, a.pmin));
 					@:privateAccess p.initStyle(a.name, v);
+					h.apply(p.obj, v);
 				}
 			}
-			for( c in e.children )
-				addRec(c, cast p.contentRoot);
+			if( !childrenCreated ) {
+				for( c in e.children )
+					addRec(c, cast p.contentRoot);
+			}
 		case Text(text):
 			var tf = new h2d.HtmlText(hxd.res.DefaultFont.get(), parent);
 			tf.dom = domkit.Properties.create("html-text", tf);

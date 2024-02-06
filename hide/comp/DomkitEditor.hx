@@ -23,6 +23,7 @@ private typedef TypedProperty = {
 
 private typedef TypedComponent = {
 	var name : String;
+	var ?classDef : hscript.Checker.CClass;
 	var ?parent : TypedComponent;
 	var properties : Map<String, TypedProperty>;
 	var vars : Map<String, Type>;
@@ -51,6 +52,8 @@ class DomkitChecker extends ScriptEditor.ScriptChecker {
 
 	var t_string : Type;
 	var parsers : Array<domkit.CssValue.ValueParser>;
+	var lastVariables : Map<String, domkit.CssValue> = new Map();
+	public var params : Map<String, Type> = new Map();
 	public var components : Map<String, TypedComponent>;
 	public var properties : Map<String, Array<TypedProperty>>;
 	public var definedIdents : Map<String, Array<TypedComponent>>;
@@ -75,12 +78,25 @@ class DomkitChecker extends ScriptEditor.ScriptChecker {
 	}
 
 	public function checkDML( dmlCode : String, filePath : String, position = 0 ) {
-		// reset locals
+		init();
+		// reset locals and other vars
 		checker.check({ e : EBlock([]), pmin : 0, pmax : 0, origin : "", line : 0 });
+		@:privateAccess checker.locals = params.copy();
 		definedIdents = new Map();
 		var parser = new domkit.MarkupParser();
 		parser.allowRawText = true;
 		var expr = parser.parse(dmlCode,filePath, position);
+		switch( expr.kind ) {
+		case Node(null) if( expr.children.length == 1 ): expr = expr.children[0];
+		default:
+		}
+		switch( expr.kind ) {
+		case Node(name) if( name != null ):
+			var comp = resolveComp(name.split(":")[0]);
+			if( comp != null && comp.classDef != null )
+				checker.setGlobal("this",TInst(comp.classDef,[]));
+		default:
+		}
 		try {
 			checkDMLRec(expr, true);
 		} catch( e : hscript.Expr.Error ) {
@@ -102,7 +118,7 @@ class DomkitChecker extends ScriptEditor.ScriptChecker {
 				ide.quickError(file+":"+line+": "+e.message);
 			}
 		}
-
+		lastVariables = parser.variables;
 		var rules = parser.parseSheet(cssCode);
 		var w = parser.warnings[0];
 		if( w != null )
@@ -210,6 +226,7 @@ class DomkitChecker extends ScriptEditor.ScriptChecker {
 			if( name == null )
 				continue;
 			var comp = makeComponent(name);
+			comp.classDef = c;
 			cmap.set(c.name, comp);
 			if( StringTools.startsWith(c.name,"h2d.domkit.") )
 				cmap.set("h2d."+c.name.substr(11,c.name.length-11-4), comp);
@@ -487,18 +504,23 @@ class DomkitChecker extends ScriptEditor.ScriptChecker {
 						throw new domkit.Error(c.name+" does not have property "+a.name, a.pmin, a.pmax);
 					var pt = switch( a.value ) {
 					case RawValue(_): t_string;
-					case Code(code): typeCode(code, a.pmin);
+					case Code(code): typeCode(code, a.vmin);
 					}
 					unify(t, pt, c, a.name, a);
 					continue;
 				}
 				switch( a.value ) {
 				case RawValue(str):
-					typeProperty(pname, a.pmin, a.pmax, new domkit.CssParser().parseValue(str), c);
+					typeProperty(pname, a.vmin, a.pmax, new domkit.CssParser().parseValue(str), c);
 				case Code(code):
-					var t = typeCode(code, a.pmin);
+					var t = typeCode(code, a.vmin);
 					unify(t, p.type, c, pname, a);
 				}
+			}
+			if( e.condition != null ) {
+				var cond = e.condition;
+			 	var t = typeCode(cond.cond, cond.pmin);
+				unify(t, TBool, c, "if", cond);
 			}
 			for( c in e.children )
 				checkDMLRec(c);
@@ -569,6 +591,14 @@ class DomkitEditor extends CodeEditor {
 		}
 	}
 
+	public function getComponent() {
+		var compReg = ~/<([A-Za-z0-9_]+)/;
+		if( !compReg.match(code) )
+			return null;
+		var name = compReg.matched(1);
+		return checker.components.get(name);
+	}
+
 	override function getCompletion( position : Int ) {
 		var code = code;
 		var results = super.getCompletion(position);
@@ -588,7 +618,7 @@ class DomkitEditor extends CodeEditor {
 		}
 		switch( kind ) {
 		case Less:
-			for( c => def in checker.constants )
+			for( c => def in @:privateAccess checker.lastVariables )
 				results.push({
 					kind : Property,
 					label : "@"+c,

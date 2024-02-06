@@ -118,16 +118,24 @@ class Config {
 		save();
 	}
 
+	static function alert(msg) {
+		#if js
+		js.Browser.window.alert(msg);
+		#else
+		throw msg;
+		#end
+	}
+
 	public static function loadConfig(config : Config, path : String) : Config {
 		try {
 			config.load(path);
 		} catch(err) {
-			js.Browser.window.alert('Couldn\'t load config file ${path}. Reverting to default config.\n${err}.');
+			alert('Couldn\'t load config file ${path}. Reverting to default config.\n${err}.');
 		}
 		return config;
 	}
 
-	public static function loadForProject( projectPath : String, resourcePath : String ) {
+	public static function loadForProject( projectPath : String, resourcePath : String, appDataPath : String ) {
 		var hidePath = Ide.inst.appPath;
 
 		var defaults = new Config();
@@ -135,7 +143,7 @@ class Config {
 			defaults.load(hidePath + "/defaultProps.json");
 		}
 		catch (err) {
-			js.Browser.window.alert('Fatal error : Couldn\'t load ${hidePath}/defaultProps.json. Please check your hide installation.\n$err');
+			alert('Fatal error : Couldn\'t load ${hidePath}/defaultProps.json. Please check your hide installation.\n$err');
 			Sys.exit(-1);
 		}
 
@@ -153,7 +161,7 @@ class Config {
 
 		var perProject = loadConfig(new Config(userGlobals), resourcePath + "/props.json");
 
-		var projectUserCustom = loadConfig(new Config(perProject), nw.App.dataPath + "/" + projectPath.split("\\").join("/").split("/").join("_").split(":").join("_") + ".json");
+		var projectUserCustom = loadConfig(new Config(perProject), appDataPath + "/" + projectPath.split("\\").join("/").split("/").join("_").split(":").join("_") + ".json");
 		var p = projectUserCustom;
 		if( p.source.hide == null )
 			p.source.hide = ({ layouts : [], renderer : null, dbCategories: null, dbProofread: null } : HideProjectConfig);
